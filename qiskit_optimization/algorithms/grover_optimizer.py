@@ -149,6 +149,24 @@ class GroverOptimizer(OptimizationAlgorithm):
         a_operator.compose(quadratic_form, inplace=True)
         return a_operator
 
+    # iterator function
+    def _iterator(self, n_key):
+        m = 1
+        
+        # Variables for stopping if we've hit the rotation max.
+        rotations = 0
+        max_rotations = int(np.ceil(100 * np.pi / 4))
+
+        while not (rotations >= max_rotations):
+            # Determine the number of rotations.
+            rotation_count = algorithm_globals.random.integers(0, m)
+            rotations += rotation_count
+
+            yield rotation_count
+
+            # Using Durr and Hoyer method, increase m.
+            m = int(np.ceil(min(m * 8 / 7, 2 ** (n_key / 2))))  
+
     def _get_oracle(self, qr_key_value):
         # Build negative value oracle O.
         if qr_key_value is None:
@@ -215,10 +233,6 @@ class GroverOptimizer(OptimizationAlgorithm):
         operation_count = {}
         iteration = 0
 
-        # Variables for stopping if we've hit the rotation max.
-        rotations = 0
-        max_rotations = int(np.ceil(100 * np.pi / 4))
-
         # Initialize oracle helper object.
         qr_key_value = QuantumRegister(self._num_key_qubits + self._num_value_qubits)
         orig_constant = problem_.objective.constant
@@ -226,90 +240,71 @@ class GroverOptimizer(OptimizationAlgorithm):
         oracle, is_good_state = self._get_oracle(qr_key_value)
 
         while not optimum_found:
-            m = 1
-            improvement_found = False
-
             # Get oracle O and the state preparation operator A for the current threshold.
             problem_.objective.constant = orig_constant - threshold
             a_operator = self._get_a_operator(qr_key_value, problem_)
 
-            # Iterate until we measure a negative.
-            loops_with_no_improvement = 0
-            while not improvement_found:
-                # Determine the number of rotations.
-                loops_with_no_improvement += 1
-                rotation_count = algorithm_globals.random.integers(0, m)
-                rotations += rotation_count
-                # Apply Grover's Algorithm to find values below the threshold.
-                # TODO: Utilize Grover's incremental feature - requires changes to Grover.
-                amp_problem = AmplificationProblem(
-                    oracle=oracle,
-                    state_preparation=a_operator,
-                    is_good_state=is_good_state,
-                )
-                grover = Grover()
-                circuit = grover.construct_circuit(
-                    problem=amp_problem, power=rotation_count, measurement=measurement
-                )
+            # Apply Grover's Algorithm to find values below the threshold.
+            # TODO: Utilize Grover's incremental feature - requires changes to Grover.
+            amp_problem = AmplificationProblem(
+                oracle=oracle,
+                state_preparation=a_operator,
+                is_good_state=is_good_state,
+            )
+            # grover = Grover(sampler=self._sampler, iterations=self._iterator(m))
+            grover = Grover()
+            circuit = grover.construct_circuit(
+                problem=amp_problem, power=list(self._iterator(n_key)), measurement=measurement
+            )
 
-                # Get the next outcome.
-                outcome = self._measure(circuit)
-                k = int(outcome[0:n_key], 2)
-                v = outcome[n_key : n_key + n_value]
-                int_v = self._bin_to_int(v, n_value) + threshold
-                logger.info("Outcome: %s", outcome)
-                logger.info("Value Q(x): %s", int_v)
-                # If the value is an improvement, we update the iteration parameters (e.g. oracle).
-                if int_v < optimum_value:
-                    optimum_key = k
-                    optimum_value = int_v
-                    logger.info("Current Optimum Key: %s", optimum_key)
-                    logger.info("Current Optimum Value: %s", optimum_value)
-                    improvement_found = True
-                    threshold = optimum_value
+            # Get the next outcome.
+            outcome = self._measure(circuit)
+            k = int(outcome[0:n_key], 2)
+            v = outcome[n_key : n_key + n_value]
+            int_v = self._bin_to_int(v, n_value) + threshold
+            logger.info("Outcome: %s", outcome)
+            logger.info("Value Q(x): %s", int_v)
+            # If the value is an improvement, we update the iteration parameters (e.g. oracle).
+            if int_v < optimum_value:
+                optimum_key = k
+                optimum_value = int_v
+                logger.info("Current Optimum Key: %s", optimum_key)
+                logger.info("Current Optimum Value: %s", optimum_value)
+                threshold = optimum_value
 
-                    # trace out work qubits and store samples
-                    if self._sampler is not None:
+                # trace out work qubits and store samples
+                if self._sampler is not None:
+                    self._circuit_results = {
+                        i[-1 * n_key :]: v for i, v in self._circuit_results.items()
+                    }
+                else:
+                    if self._quantum_instance.is_statevector:
+                        indices = list(range(n_key, len(outcome)))
+                        rho = partial_trace(self._circuit_results, indices)
+                        self._circuit_results = cast(Dict, np.diag(rho.data) ** 0.5)
+                    else:
                         self._circuit_results = {
                             i[-1 * n_key :]: v for i, v in self._circuit_results.items()
                         }
-                    else:
-                        if self._quantum_instance.is_statevector:
-                            indices = list(range(n_key, len(outcome)))
-                            rho = partial_trace(self._circuit_results, indices)
-                            self._circuit_results = cast(Dict, np.diag(rho.data) ** 0.5)
-                        else:
-                            self._circuit_results = {
-                                i[-1 * n_key :]: v for i, v in self._circuit_results.items()
-                            }
-                    raw_samples = self._eigenvector_to_solutions(
-                        self._circuit_results, problem_init
-                    )
-                    raw_samples.sort(key=lambda x: x.fval)
-                    samples, _ = self._interpret_samples(problem, raw_samples, self._converters)
-                else:
-                    # Using Durr and Hoyer method, increase m.
-                    m = int(np.ceil(min(m * 8 / 7, 2 ** (n_key / 2))))
-                    logger.info("No Improvement. M: %s", m)
+                raw_samples = self._eigenvector_to_solutions(
+                    self._circuit_results, problem_init
+                )
+                raw_samples.sort(key=lambda x: x.fval)
+                samples, _ = self._interpret_samples(problem, raw_samples, self._converters)
+            else:
+                # Check if we've already seen this value.
+                if k not in keys_measured:
+                    keys_measured.append(k)
 
-                    # Check if we've already seen this value.
-                    if k not in keys_measured:
-                        keys_measured.append(k)
+                # Assume the optimal if any of the stop parameters are true.
+                if len(keys_measured) == num_solutions:
+                    optimum_found = True
 
-                    # Assume the optimal if any of the stop parameters are true.
-                    if (
-                        loops_with_no_improvement >= self._n_iterations
-                        or len(keys_measured) == num_solutions
-                        or rotations >= max_rotations
-                    ):
-                        improvement_found = True
-                        optimum_found = True
-
-                # Track the operation count.
-                operations = circuit.count_ops()
-                operation_count[iteration] = operations
-                iteration += 1
-                logger.info("Operation Count: %s\n", operations)
+            # Track the operation count.
+            operations = circuit.count_ops()
+            operation_count[iteration] = operations
+            iteration += 1
+            logger.info("Operation Count: %s\n", operations)
 
         # If the constant is 0 and we didn't find a negative, the answer is likely 0.
         if optimum_value >= 0 and orig_constant == 0:
