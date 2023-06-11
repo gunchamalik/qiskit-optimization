@@ -236,7 +236,7 @@ class GroverOptimizer(OptimizationAlgorithm):
         # Initialize oracle helper object.
         qr_key_value = QuantumRegister(self._num_key_qubits + self._num_value_qubits)
         orig_constant = problem_.objective.constant
-        measurement = self._quantum_instance is None or not self._quantum_instance.is_statevector
+        #measurement = self._quantum_instance is None or not self._quantum_instance.is_statevector
         oracle, is_good_state = self._get_oracle(qr_key_value)
 
         while not optimum_found:
@@ -251,60 +251,64 @@ class GroverOptimizer(OptimizationAlgorithm):
                 state_preparation=a_operator,
                 is_good_state=is_good_state,
             )
-            # grover = Grover(sampler=self._sampler, iterations=self._iterator(m))
-            grover = Grover()
-            circuit = grover.construct_circuit(
-                problem=amp_problem, power=list(self._iterator(n_key)), measurement=measurement
-            )
+            #grover = Grover()
+            #circuit = grover.construct_circuit(
+            #    problem=amp_problem, power=2, measurement=measurement
+            #)
 
+            grover = Grover(sampler=self._sampler, iterations=self._iterator(n_key))
+            result = grover.amplify(amp_problem)
+            
             # Get the next outcome.
-            outcome = self._measure(circuit)
-            k = int(outcome[0:n_key], 2)
-            v = outcome[n_key : n_key + n_value]
-            int_v = self._bin_to_int(v, n_value) + threshold
-            logger.info("Outcome: %s", outcome)
-            logger.info("Value Q(x): %s", int_v)
-            # If the value is an improvement, we update the iteration parameters (e.g. oracle).
-            if int_v < optimum_value:
-                optimum_key = k
-                optimum_value = int_v
-                logger.info("Current Optimum Key: %s", optimum_key)
-                logger.info("Current Optimum Value: %s", optimum_value)
-                threshold = optimum_value
+            for circuit_result in result.circuit_results:
+                outcome = self._measure(circuit_result)
+                k = int(outcome[0:n_key], 2)
+                v = outcome[n_key : n_key + n_value]
+                int_v = self._bin_to_int(v, n_value) + threshold
+                logger.info("Outcome: %s", outcome)
+                logger.info("Value Q(x): %s", int_v)
+                # If the value is an improvement, we update the iteration parameters (e.g. oracle).
+                if int_v < optimum_value:
+                    optimum_key = k
+                    optimum_value = int_v
+                    logger.info("Current Optimum Key: %s", optimum_key)
+                    logger.info("Current Optimum Value: %s", optimum_value)
+                    threshold = optimum_value
 
-                # trace out work qubits and store samples
-                if self._sampler is not None:
-                    self._circuit_results = {
-                        i[-1 * n_key :]: v for i, v in self._circuit_results.items()
-                    }
-                else:
-                    if self._quantum_instance.is_statevector:
-                        indices = list(range(n_key, len(outcome)))
-                        rho = partial_trace(self._circuit_results, indices)
-                        self._circuit_results = cast(Dict, np.diag(rho.data) ** 0.5)
-                    else:
+                    # trace out work qubits and store samples
+                    if self._sampler is not None:
                         self._circuit_results = {
                             i[-1 * n_key :]: v for i, v in self._circuit_results.items()
                         }
-                raw_samples = self._eigenvector_to_solutions(
-                    self._circuit_results, problem_init
-                )
-                raw_samples.sort(key=lambda x: x.fval)
-                samples, _ = self._interpret_samples(problem, raw_samples, self._converters)
-            else:
-                # Check if we've already seen this value.
-                if k not in keys_measured:
-                    keys_measured.append(k)
+                    else:
+                        if self._quantum_instance.is_statevector:
+                            indices = list(range(n_key, len(outcome)))
+                            rho = partial_trace(self._circuit_results, indices)
+                            self._circuit_results = cast(Dict, np.diag(rho.data) ** 0.5)
+                        else:
+                            self._circuit_results = {
+                                i[-1 * n_key :]: v for i, v in self._circuit_results.items()
+                            }
+                    raw_samples = self._eigenvector_to_solutions(
+                        self._circuit_results, problem_init
+                    )
+                    raw_samples.sort(key=lambda x: x.fval)
+                    samples, _ = self._interpret_samples(problem, raw_samples, self._converters)
+                else:
+                    # Check if we've already seen this value.
+                    if k not in keys_measured:
+                        keys_measured.append(k)
 
-                # Assume the optimal if any of the stop parameters are true.
-                if len(keys_measured) == num_solutions:
-                    optimum_found = True
+                    # Assume the optimal if any of the stop parameters are true.
+                    if len(keys_measured) == num_solutions:
+                        optimum_found = True
 
-            # Track the operation count.
-            operations = circuit.count_ops()
-            operation_count[iteration] = operations
-            iteration += 1
-            logger.info("Operation Count: %s\n", operations)
+                # Track the operation count.
+                #operations = circuit.count_ops()
+                operations = len(result.circuit_results)
+                operation_count[iteration] = operations
+                iteration += 1
+                logger.info("Operation Count: %s\n", operations)
 
         # If the constant is 0 and we didn't find a negative, the answer is likely 0.
         if optimum_value >= 0 and orig_constant == 0:
@@ -332,32 +336,34 @@ class GroverOptimizer(OptimizationAlgorithm):
             ),
         )
 
-    def _measure(self, circuit: QuantumCircuit) -> str:
+    def _measure(self, circuit_result) -> str:
         """Get probabilities from the given backend, and picks a random outcome."""
-        probs = self._get_prob_dist(circuit)
+        probs = self._get_prob_dist(circuit_result)
         logger.info("Frequencies: %s", probs)
         # Pick a random outcome.
         return algorithm_globals.random.choice(list(probs.keys()), 1, p=list(probs.values()))[0]
 
-    def _get_prob_dist(self, qc: QuantumCircuit) -> Dict[str, float]:
+    def _get_prob_dist(self, circuit_result) -> Dict[str, float]:
         """Gets probabilities from a given backend."""
         # Execute job and filter results.
         if self._sampler is not None:
-            job = self._sampler.run([qc])
+            #job = self._sampler.run([qc])
 
-            try:
-                result = job.result()
-            except Exception as exc:
-                raise QiskitOptimizationError("Sampler job failed.") from exc
-            quasi_dist = result.quasi_dists[0]
+            #try:
+            #    result = job.result()
+            #except Exception as exc:
+            #    raise QiskitOptimizationError("Sampler job failed.") from exc
+            #quasi_dist = result.quasi_dists[0]
+            quasi_dist = circuit_result
             raw_prob_dist = {
                 k: v
-                for k, v in quasi_dist.binary_probabilities(qc.num_qubits).items()
+                #for k, v in quasi_dist.binary_probabilities(qc.num_qubits).items()
+                for k, v in quasi_dist.items()
                 if v >= self._MIN_PROBABILITY
             }
             prob_dist = {k[::-1]: v for k, v in raw_prob_dist.items()}
             self._circuit_results = {i: v**0.5 for i, v in raw_prob_dist.items()}
-        else:
+        '''else:
             result = self._quantum_instance.execute(qc)
             if self._quantum_instance.is_statevector:
                 state = result.get_statevector(qc)
@@ -378,7 +384,7 @@ class GroverOptimizer(OptimizationAlgorithm):
                 prob_dist = {
                     key[::-1]: val / shots for key, val in sorted(state.items()) if val > 0
                 }
-                self._circuit_results = {b: (v / shots) ** 0.5 for (b, v) in state.items()}
+                self._circuit_results = {b: (v / shots) ** 0.5 for (b, v) in state.items()}'''
         return prob_dist
 
     @staticmethod
