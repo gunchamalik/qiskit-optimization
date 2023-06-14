@@ -348,11 +348,12 @@ class GroverOptimizer(OptimizationAlgorithm):
         # Execute job and filter results.
         if self._sampler is not None:
             #job = self._sampler.run([qc])
+            job = self._sampler.run([circuit_result])
 
-            #try:
-            #    result = job.result()
-            #except Exception as exc:
-            #    raise QiskitOptimizationError("Sampler job failed.") from exc
+            try:
+                result = job.result().combine_counts()
+            except Exception as exc:
+                raise QiskitOptimizationError("Sampler job failed.") from exc
             #quasi_dist = result.quasi_dists[0]
             quasi_dist = circuit_result
             raw_prob_dist = {
