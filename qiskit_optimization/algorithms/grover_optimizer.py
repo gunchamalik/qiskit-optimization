@@ -342,6 +342,21 @@ class GroverOptimizer(OptimizationAlgorithm):
         logger.info("Frequencies: %s", probs)
         # Pick a random outcome.
         return algorithm_globals.random.choice(list(probs.keys()), 1, p=list(probs.values()))[0]
+    """def construct_circuit_result(self, problem: AmplificationProblem, power: int | None = None, measurement: bool = False
+    ) -> QuantumCircuit:
+           if power is None:
+            if len(self._iterations) > 1:
+                raise ValueError("Please pass ``power`` if the iterations are not an integer.")
+            power =  self._iterations[0]
+           if power > 0:
+            qc.compose(problem.a_operator.power(power), inplace=True)
+
+        if measurement:
+            measurement_cr = ClassicalRegister(problem.N)) N: OBJECTIVES QUBITS number of result obtained after iteration
+            qc.add_register(measurement_cr)
+            qc.measure(problem.N, measurement_cr)
+
+        return qc"""
 
     def _get_prob_dist(self, circuit_result) -> Dict[str, float]:
         """Gets probabilities from a given backend."""
