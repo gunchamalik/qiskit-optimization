@@ -238,12 +238,13 @@ class GroverOptimizer(OptimizationAlgorithm):
         orig_constant = problem_.objective.constant
         #measurement = self._quantum_instance is None or not self._quantum_instance.is_statevector
         oracle, is_good_state = self._get_oracle(qr_key_value)
+        loops_with_no_improvement = 0
 
         while not optimum_found:
             # Get oracle O and the state preparation operator A for the current threshold.
             problem_.objective.constant = orig_constant - threshold
             a_operator = self._get_a_operator(qr_key_value, problem_)
-
+            
             # Apply Grover's Algorithm to find values below the threshold.
             # TODO: Utilize Grover's incremental feature - requires changes to Grover.
             amp_problem = AmplificationProblem(
@@ -251,67 +252,36 @@ class GroverOptimizer(OptimizationAlgorithm):
                 state_preparation=a_operator,
                 is_good_state=is_good_state,
             )
-            #grover = Grover()
-            #circuit = grover.construct_circuit(
-            #    problem=amp_problem, power=2, measurement=measurement
-            #)
-
+            
             grover = Grover(sampler=self._sampler, iterations=self._iterator(n_key))
             result = grover.amplify(amp_problem)
-            
-            # Get the next outcome.
-            for circuit_result in result.circuit_results:
-                outcome = self._measure(circuit_result)
-                k = int(outcome[0:n_key], 2)
-                v = outcome[n_key : n_key + n_value]
-                int_v = self._bin_to_int(v, n_value) + threshold
-                logger.info("Outcome: %s", outcome)
-                logger.info("Value Q(x): %s", int_v)
-                # If the value is an improvement, we update the iteration parameters (e.g. oracle).
-                if int_v < optimum_value:
-                    optimum_key = k
-                    optimum_value = int_v
-                    logger.info("Current Optimum Key: %s", optimum_key)
-                    logger.info("Current Optimum Value: %s", optimum_value)
-                    threshold = optimum_value
 
-                    # trace out work qubits and store samples
-                    if self._sampler is not None:
-                        self._circuit_results = {
-                            i[-1 * n_key :]: v for i, v in self._circuit_results.items()
-                        }
-                    else:
-                        if self._quantum_instance.is_statevector:
-                            indices = list(range(n_key, len(outcome)))
-                            rho = partial_trace(self._circuit_results, indices)
-                            self._circuit_results = cast(Dict, np.diag(rho.data) ** 0.5)
-                        else:
-                            self._circuit_results = {
-                                i[-1 * n_key :]: v for i, v in self._circuit_results.items()
-                            }
-                    raw_samples = self._eigenvector_to_solutions(
-                        self._circuit_results, problem_init
-                    )
-                    raw_samples.sort(key=lambda x: x.fval)
-                    samples, _ = self._interpret_samples(problem, raw_samples, self._converters)
-                else:
-                    # Check if we've already seen this value.
-                    if k not in keys_measured:
-                        keys_measured.append(k)
+            optimum_key = result.top_measurement
+            if result.oracle_evaluation == True:
+                threshold = result.max_probability
+                loops_with_no_improvement += 1
+            else:
+                # Check if we've already seen this value.
+                if optimum_key not in keys_measured:
+                    keys_measured.append(result.max_probability)
+                
+                loops_with_no_improvement += 1
 
-                    # Assume the optimal if any of the stop parameters are true.
-                    if len(keys_measured) == num_solutions:
-                        optimum_found = True
+            # Assume the optimal if any of the stop parameters are true.
+            if (
+                loops_with_no_improvement >= self._n_iterations
+                or len(keys_measured) == num_solutions
+            ):
+                optimum_found = True
 
-                # Track the operation count.
-                #operations = circuit.count_ops()
-                operations = len(result.circuit_results)
-                operation_count[iteration] = operations
-                iteration += 1
-                logger.info("Operation Count: %s\n", operations)
+            operations = len(result.circuit_results)
+            operation_count[iteration] = operations
+            iteration += 1
+            logger.info("Operation Count: %s\n", operations)
 
         # If the constant is 0 and we didn't find a negative, the answer is likely 0.
-        if optimum_value >= 0 and orig_constant == 0:
+        #if optimum_value >= 0 and orig_constant == 0:
+        if threshold >= 0 and orig_constant == 0:
             optimum_key = 0
 
         opt_x = np.array([1 if s == "1" else 0 for s in f"{optimum_key:{n_key}b}"])
