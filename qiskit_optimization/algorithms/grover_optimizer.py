@@ -254,7 +254,11 @@ class GroverOptimizer(OptimizationAlgorithm):
                 is_good_state=is_good_state,
             )
             
-            grover = Grover(sampler=self._sampler, iterations=self._iterator(n_key))
+            if self._sampler is not None:
+                grover = Grover(sampler=self._sampler, iterations=self._iterator(n_key))
+            else:
+                grover = Grover(quantum_instance=self._quantum_instance, iterations=self._iterator(n_key))
+            
             result = grover.amplify(amp_problem)
 
             outcome = result.top_measurement
@@ -263,6 +267,7 @@ class GroverOptimizer(OptimizationAlgorithm):
             int_v = self._bin_to_int(v, n_value) + threshold
             logger.info("Outcome: %s", outcome)
             logger.info("Value Q(x): %s", int_v)
+            print("result.oracle_evaluation:", result.oracle_evaluation)
             if result.oracle_evaluation == True:
                 optimum_key = k
                 threshold = int_v
@@ -279,11 +284,11 @@ class GroverOptimizer(OptimizationAlgorithm):
                 else:
                     if self._quantum_instance.is_statevector:
                         indices = list(range(n_key, len(outcome)))
-                        rho = partial_trace(self._circuit_results, indices)
+                        rho = partial_trace(result.circuit_results, indices)
                         self._circuit_results = cast(Dict, np.diag(rho.data) ** 0.5)
                     else:
                         self._circuit_results = {
-                            i[-1 * n_key :]: v for i, v in self._circuit_results.items()
+                            i[-1 * n_key :]: v for i, v in result.circuit_results.items()
                         }
                     print("else: circuit_results", self._circuit_results)
                 raw_samples = self._eigenvector_to_solutions(
@@ -295,8 +300,8 @@ class GroverOptimizer(OptimizationAlgorithm):
                 # Check if we've already seen this value.
                 if k not in keys_measured:
                     keys_measured.append(k)
-                
-            loops_with_no_improvement += 1
+                loops_with_no_improvement += 1
+            print("loops_with_no_improvement", loops_with_no_improvement)
 
             # Assume the optimal if any of the stop parameters are true.
             if (
