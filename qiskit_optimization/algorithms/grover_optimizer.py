@@ -209,6 +209,7 @@ class GroverOptimizer(OptimizationAlgorithm):
         if self._quantum_instance is not None and self._sampler is not None:
             raise ValueError("Only one of quantum_instance or sampler can be passed, not both!")
 
+        print("self._sampler", self._sampler)
         self._verify_compatibility(problem)
 
         # convert problem to minimization QUBO problem
@@ -220,7 +221,7 @@ class GroverOptimizer(OptimizationAlgorithm):
         # Variables for tracking the optimum.
         optimum_found = False
         optimum_key = math.inf
-        optimum_value = math.inf
+        #optimum_value = math.inf
         threshold = 0
         n_key = self._num_key_qubits
         n_value = self._num_value_qubits
@@ -256,16 +257,46 @@ class GroverOptimizer(OptimizationAlgorithm):
             grover = Grover(sampler=self._sampler, iterations=self._iterator(n_key))
             result = grover.amplify(amp_problem)
 
-            optimum_key = result.top_measurement
+            outcome = result.top_measurement
+            k = int(outcome[0:n_key], 2)
+            v = outcome[n_key : n_key + n_value]
+            int_v = self._bin_to_int(v, n_value) + threshold
+            logger.info("Outcome: %s", outcome)
+            logger.info("Value Q(x): %s", int_v)
             if result.oracle_evaluation == True:
-                threshold = result.max_probability
-                loops_with_no_improvement += 1
+                optimum_key = k
+                threshold = int_v
+                #optimum_value = int_v
+                logger.info("Current Optimum Key: %s", optimum_key)
+                logger.info("Current Threshold: %s", threshold)
+
+                # trace out work qubits and store samples
+                if self._sampler is not None:
+                    self._circuit_results = {
+                            i[-1 * n_key :]: v for i, v in result.circuit_results.items()
+                        }
+                    print("if: circuit_results", self._circuit_results)
+                else:
+                    if self._quantum_instance.is_statevector:
+                        indices = list(range(n_key, len(outcome)))
+                        rho = partial_trace(self._circuit_results, indices)
+                        self._circuit_results = cast(Dict, np.diag(rho.data) ** 0.5)
+                    else:
+                        self._circuit_results = {
+                            i[-1 * n_key :]: v for i, v in self._circuit_results.items()
+                        }
+                    print("else: circuit_results", self._circuit_results)
+                raw_samples = self._eigenvector_to_solutions(
+                    self._circuit_results, problem_init
+                )
+                raw_samples.sort(key=lambda x: x.fval)
+                samples, _ = self._interpret_samples(problem, raw_samples, self._converters)
             else:
                 # Check if we've already seen this value.
-                if optimum_key not in keys_measured:
-                    keys_measured.append(result.max_probability)
+                if k not in keys_measured:
+                    keys_measured.append(k)
                 
-                loops_with_no_improvement += 1
+            loops_with_no_improvement += 1
 
             # Assume the optimal if any of the stop parameters are true.
             if (
@@ -280,7 +311,6 @@ class GroverOptimizer(OptimizationAlgorithm):
             logger.info("Operation Count: %s\n", operations)
 
         # If the constant is 0 and we didn't find a negative, the answer is likely 0.
-        #if optimum_value >= 0 and orig_constant == 0:
         if threshold >= 0 and orig_constant == 0:
             optimum_key = 0
 
