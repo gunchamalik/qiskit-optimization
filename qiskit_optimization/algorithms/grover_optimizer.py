@@ -278,17 +278,13 @@ class GroverOptimizer(OptimizationAlgorithm):
                 grover = Grover(quantum_instance=self._quantum_instance, iterations=self._iterator())
             
             result = grover.amplify(amp_problem)
-
+            
             outcome = result.top_measurement
+            #outcome = algorithm_globals.random.choice(list(result.circuit_results[0].keys()), 1, p=list(result.circuit_results[0].values()))[0]
             outcome_reverse = outcome[::-1]
-            print("outcome_reverse", outcome_reverse)
-            print("n_key=", n_key)
-            print("n_value=", n_value)
             k = int(outcome_reverse[0:n_key], 2)
             v = outcome_reverse[n_key : n_key + n_value]
             int_v = self._bin_to_int(v, n_value) + threshold
-            print("optimum_value=", optimum_value)
-            print("int_v=", int_v)
             logger.info("Outcome: %s", outcome)
             logger.info("Value Q(x): %s", int_v)
             if int_v < optimum_value:
@@ -297,9 +293,6 @@ class GroverOptimizer(OptimizationAlgorithm):
                 logger.info("Current Optimum Key: %s", optimum_key)
                 logger.info("Current Threshold: %s", optimum_value)
                 threshold = optimum_value
-                print("optimum_key", optimum_key)
-                print("threshold", threshold)
-                print("circuit_results=", self._circuit_results)
                 
                 # trace out work qubits and store samples
                 if self._sampler is not None:
@@ -315,23 +308,17 @@ class GroverOptimizer(OptimizationAlgorithm):
                         self._circuit_results = {
                             i[-1 * n_key :]: v for i, v in result.circuit_results[0].items()
                         }
-                print("_circuit_results=", self._circuit_results)
                 raw_samples = self._eigenvector_to_solutions(
                     self._circuit_results, problem_init
                 )
                 raw_samples.sort(key=lambda x: x.fval)
-                print("raw_samples=", raw_samples)
                 samples, _ = self._interpret_samples(problem, raw_samples, self._converters)
-                print("samples=", samples)
-                print("_=", _)
             else:
                 # loops_with_no_improvement += 1
                 
                 # Check if we've already seen this value.
                 if k not in keys_measured:
                     keys_measured.append(k)
-                print("loops_with_no_improvement", loops_with_no_improvement)
-                print("self._n_iterations", self._n_iterations)
                 # Assume the optimal if any of the stop parameters are true.
                 if (
                     loops_with_no_improvement >= self._n_iterations
@@ -342,7 +329,6 @@ class GroverOptimizer(OptimizationAlgorithm):
 
             # Track the operation count.
             # operations = circuit.count_ops()
-            print("operations TBD")
             # operation_count[iteration] = operations
             # iteration += 1
             # logger.info("Operation Count: %s\n", operations)
@@ -352,11 +338,9 @@ class GroverOptimizer(OptimizationAlgorithm):
             optimum_key = 0
 
         opt_x = np.array([1 if s == "1" else 0 for s in f"{optimum_key:{n_key}b}"])
-        print("opt_x=", opt_x)
         # Compute function value of minimization QUBO
         fval = problem_init.objective.evaluate(opt_x)
-        print("fval=", fval)
-
+    
         # cast binaries back to integers and eventually minimization to maximization
         return cast(
             GroverOptimizationResult,
